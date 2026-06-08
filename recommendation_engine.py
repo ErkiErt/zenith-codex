@@ -11,18 +11,14 @@ from typing import Any
 DB_NAME = "Zenith_Materjalibaas.sqlite"
 
 # ── Paranduste ajalugu ─────────────────────────────────────────────────────────
-# FIX 1 : food_contact / construction_fire nõuavad selget app/tag vastet (require_app_or_tag gate)
-# FIX 2 : low_temperature on eksplitsiitsete apps/tags-iga; penaliseerib sbr; kontrollib min_temp_c
-# FIX 3 : chemical nõuab app/tag vastet; materjalipõhine vaste üksi ei piisa
-# FIX 4 : quality_bonus ei premieeri food_grade / flame_retardant / fire_resistance
-# FIX 5 : construction_fire lisatud eraldi gated intendina
-# FIX 6 : DIRECT_TERMS — eemaldatud "oli" (liiga lühike), "lipaagi" (duplikaat),
-#          "kulm" (konflikt "kulumis-"-ega); lisatud "olipaak", "kutuse", "kytuse"
-# FIX 7 : temperatuuriregex kasutab sõnapiiri \b et vältida "cr"/"csm" valevasteid
-# FIX 8 : külma temperatuuri kontroll — kui service_temp_c < 0, kontrolli min_temp_c
-#          (mitte max_temp_c, mis oli alati tõene)
-# FIX 9 : tühja päringu sort — tähestiku järgi product_name alusel
-# FIX 10: lumelukkamine + abrasion_wear topeltskooring välistatud
+# FIX A : DIRECT_TERMS otsing kasutab nüüd sõnapiiri (re.search \W) mitte
+#         substringi — välistab "uv" tabamise "tuvik"-us, "food" tabamise
+#         "foods"-is jne.
+# FIX B : "uv" asendatud täpsema "uv-kindlus"/"uv kindlus" vastu;
+#         lisatud sõnapiiri kaitse kõigile lühikestele terminitele.
+# FIX C : Külma temp harus (service_temp_c < 0) eemaldatud nõue
+#         max_temp is not None — külma puhul on max_temp ebaoluline.
+#         Toode mille max_temp puudub läbib külma kontrolli kui min_temp sobib.
 # ──────────────────────────────────────────────────────────────────────────────
 
 INTENT_RULES: dict[str, dict[str, Any]] = {
@@ -52,7 +48,7 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "materials": {"nr", "sbr"},
         "avoid_materials": {"epdm"},
     },
-    # FIX 1: gate — app/tag peab olema olemas
+    # gate — app/tag peab olema olemas
     "food_contact": {
         "apps": {"food_contact"},
         "tags": {"food_grade"},
@@ -66,14 +62,14 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "materials": {"silicone", "fkm", "epdm", "csm"},
         "avoid_materials": set(),
     },
-    # FIX 2: eksplitsiitsed apps/tags; sbr penaliseeritud
+    # eksplitsiitsed apps/tags; sbr penaliseeritud
     "low_temperature": {
         "apps": {"low_temperature"},
         "tags": {"low_temperature"},
         "materials": {"silicone", "epdm", "nr", "butyl"},
         "avoid_materials": {"sbr"},
     },
-    # FIX 3: gate — app/tag peab olema olemas
+    # gate — app/tag peab olema olemas
     "chemical": {
         "apps": {"chemical"},
         "tags": {"chemical_resistance"},
@@ -81,7 +77,7 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "avoid_materials": set(),
         "require_app_or_tag": True,
     },
-    # FIX 5: uus gated intent
+    # uus gated intent
     "construction_fire": {
         "apps": {"construction_fire"},
         "tags": {"flame_retardant", "fire_resistance"},
@@ -90,7 +86,6 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "require_app_or_tag": True,
     },
     # Reservintendid tuleviku kasutusvaldkondade jaoks — ei lisa praegu punkte.
-    # Vajadusel lisa apps/tags/materials.
     "seal_general": {
         "apps": set(),
         "tags": set(),
@@ -115,40 +110,53 @@ MATERIAL_INTENTS = {
     "material_nr": "nr",
 }
 
-# FIX 6: eemaldatud "oli" (liiga lühike — tabab "kooli", "tooli" jne),
-#         "lipaagi" (duplikaat "olipaagi"-ga),
-#         "kulm" (konflikt "kulumis-" algusega).
-#         Lisatud: "olipaak", "kutuse", "kytuse".
+# FIX A+B: "uv" asendatud täpsemate vastetega; eemaldatud "kutuse" (duplikaat),
+# "kulumine" ja "kulumiskindel" ("kulum" katab mõlemaid substringina).
+# Kõik terminid kontrollitakse nüüd sõnapiirriga (vt parse_query).
 DIRECT_TERMS = {
+    # lumesahk / abrasion
     "lumesahk": "lumelukkamine",
     "sahk": "lumelukkamine",
     "lume sahk": "lumelukkamine",
     "snow plow": "lumelukkamine",
     "snow blade": "lumelukkamine",
+    "kulum": "abrasion_wear",
+    # õli / kütus
     "olipaagi": "oilfuel",
     "olipaak": "oilfuel",
     "kutus": "oilfuel",
-    "kutuse": "oilfuel",
     "kytuse": "oilfuel",
     "bensiin": "oilfuel",
     "diisel": "oilfuel",
-    "uv": "weather_uv",
+    # UV / ilmastik — FIX B: "uv" asendatud pikemate vastetega
+    "uv-kindlus": "weather_uv",
+    "uv kindlus": "weather_uv",
+    "uv-kaitse": "weather_uv",
+    "uv kaitse": "weather_uv",
+    "uvkindlus": "weather_uv",
     "osoon": "weather_uv",
     "ilmastik": "weather_uv",
-    "kulum": "abrasion_wear",
-    "kulumine": "abrasion_wear",
-    "kulumiskindel": "abrasion_wear",
+    # food grade
+    "food grade": "food_contact",
     "food": "food_contact",
     "fda": "food_contact",
     "toiduklass": "food_contact",
+    # temperatuur
     "kuum": "high_temperature",
     "korge temperatuur": "high_temperature",
     "kylm": "low_temperature",
+    # keemia
     "kemikaal": "chemical",
     "keemia": "chemical",
+    # tulekindlus
     "tulekindlus": "construction_fire",
     "tulekaitse": "construction_fire",
 }
+
+# Terminid mis vajavad täpset sõnapiiri (mitte substringi)
+# kuna on lühikesed või esinevad muudes sõnades:
+_EXACT_TERMS = {"uv-kindlus", "uv kindlus", "uv-kaitse", "uv kaitse",
+                "uvkindlus", "food", "fda", "kuum", "kylm"}
 
 
 @dataclass
@@ -167,7 +175,7 @@ def normalize_text(value: Any) -> str:
     text = "" if value is None else str(value)
     text = text.lower().replace(chr(176), " ")
     text = unicodedata.normalize("NFKD", text)
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = "" .join(ch for ch in text if not unicodedata.combining(ch))
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -202,6 +210,18 @@ def load_database(db_path: Path | None = None) -> dict[str, list[dict[str, Any]]
         conn.close()
 
 
+def _term_in_text(term: str, normalized: str) -> bool:
+    """Kontrolli termin normalized tekstis s\u00f5napiiri arvestades.
+
+    Lühikesed / t\u00e4psust n\u00f5udvad terminid (_EXACT_TERMS) kontrollitakse
+    re.search s\u00f5napiiri (\\W) abil. Pikemad terminid kasutavad substringi
+    (kiirem, piisavalt t\u00e4pne).
+    """
+    if term in _EXACT_TERMS or len(term) <= 4:
+        return bool(re.search(rf"(^|\W){re.escape(term)}($|\W)", normalized))
+    return term in normalized
+
+
 def parse_query(query: str, synonyms: list[dict[str, Any]]) -> ParsedQuery:
     normalized = normalize_text(query)
     tokens = re.findall(r"[a-z0-9_/-]+", normalized)
@@ -218,11 +238,14 @@ def parse_query(query: str, synonyms: list[dict[str, Any]]) -> ParsedQuery:
             elif comparable_value in MATERIAL_INTENTS:
                 required_materials.add(MATERIAL_INTENTS[comparable_value])
             else:
-                intents.add(normalized_value)
+                # FIX A: lisa ainult comparable_value (lowercase, diacritics eemaldatud)
+                # et vältida suurtähtede/alakriipsude müra intents hulgas
                 intents.add(comparable_value)
 
+    # FIX A: DIRECT_TERMS kasutab _term_in_text() mis kontrollib sõnapiiri
+    # lühikeste/täpsust nõudvate terminite puhul
     for term, intent in DIRECT_TERMS.items():
-        if normalize_text(term) in normalized:
+        if _term_in_text(normalize_text(term), normalized):
             intents.add(intent)
 
     for material in ["sbr", "nbr", "epdm", "fkm", "cr", "nr", "silicone", "silikon", "csm", "butyl"]:
@@ -230,11 +253,12 @@ def parse_query(query: str, synonyms: list[dict[str, Any]]) -> ParsedQuery:
             required_materials.add("silicone" if material == "silikon" else material)
 
     service_temp = None
-    # FIX 7: sõnapiir \b välistab "cr", "csm" jm materjalikoodi valevasted
+    # sõnapiir \b välistab "cr", "csm" jm materjalikoodi valevasted;
+    # Pattern 3 negatiivne lookahead välistab "+50mm" paksuse konflikt
     for pattern in [
         r"(-?\d+(?:[\.,]\d+)?)\s*(?:\bc\b|kraadi)",
         r"(?:temp|temperatuur)[^\d-]*(-?\d+(?:[\.,]\d+)?)",
-        r"\+\s*(\d+(?:[\.,]\d+)?)",
+        r"\+\s*(\d+(?:[\.,]\d+)?)(?!\s*mm)",
     ]:
         match = re.search(pattern, normalized)
         if match:
@@ -334,7 +358,7 @@ def recommend(
     variants = data["variants"]
     results: list[dict[str, Any]] = []
 
-    # FIX 10: kui lumelukkamine on aktiivsete intentide hulgas, eemalda abrasion_wear
+    # Kui lumelukkamine on aktiivsete intentide hulgas, eemalda abrasion_wear
     # et vältida topeltskoorimist (mõlemal on identsed apps/tags)
     active_intents = set(parsed.intents)
     if "lumelukkamine" in active_intents:
@@ -366,9 +390,6 @@ def recommend(
             avoid_hit = material in rule["avoid_materials"]
             requires_gate = rule.get("require_app_or_tag", False)
 
-            # Gated intendid (food_contact, chemical, construction_fire):
-            # täispunkte saab ainult siis kui app VÕI tag selgelt vastab;
-            # materjalipõhine vaste üksi ei piisa ja saab hoiatuse.
             if requires_gate:
                 if app_hits:
                     score += 35
@@ -399,7 +420,7 @@ def recommend(
                 score -= 30
                 warnings.append(f"{material.upper()} võib selle kasutuse jaoks olla nõrk valik")
 
-        # FIX 2 järg: low_temperature — boonus kinnitatud külmareitingä eest min_temp_c kaudu
+        # low_temperature — boonus kinnitatud külmareitingä eest min_temp_c kaudu
         if "low_temperature" in active_intents:
             min_temp = row.get("min_temp_c")
             if min_temp is not None and float(min_temp) <= -40:
@@ -417,25 +438,23 @@ def recommend(
                 score -= 80
                 warnings.append("ei vasta valitud materjalile")
 
-        # FIX 8: külma temperatuuri kontroll
-        # Negatiivse service_temp korral on kriitiline et min_temp_c on piisavalt madal.
-        # Vana loogika (float(min_temp) <= t <= float(max_temp)) läbis kõik tooted
-        # sest max_temp >= -50 on alati tõene.
         if parsed.service_temp_c is not None:
             min_temp = row.get("min_temp_c")
             max_temp = row.get("max_temp_c")
-            if min_temp is not None and max_temp is not None:
-                t = parsed.service_temp_c
-                if t < 0:
-                    # Külm: oluline on min_temp_c; max_temp peab olema ≥ 0 vm kasutuskeskk.
+            t = parsed.service_temp_c
+            if t < 0:
+                # FIX C: külma puhul on ainult min_temp_c oluline;
+                # max_temp puudumine ei diskvalifitseeri toodet
+                if min_temp is not None:
                     if float(min_temp) <= t:
                         score += 35
                         reasons.append(f"min temperatuur {float(min_temp):g} C katab nõutud {t:g} C")
                     else:
                         score -= 90
                         warnings.append(f"toode ei talu {t:g} C (min {float(min_temp):g} C)")
-                else:
-                    # Soe/kuum: kontrollime täielikku vahemikku
+            else:
+                # Soe/kuum: kontrollime täielikku vahemikku
+                if min_temp is not None and max_temp is not None:
                     if float(min_temp) <= t <= float(max_temp):
                         score += 35
                         reasons.append(f"temperatuurivahemik katab {t:g} C")
@@ -472,8 +491,6 @@ def recommend(
         if "needs" in normalize_text(row.get("verification_status")):
             warnings.append("puudub täpne PDF lehe viide")
 
-        # FIX 9: tühja päringu korral lisa kõik tooted score=0-ga;
-        # sort toimub hiljem product_name järgi (vt allpool)
         is_empty_search = not query.strip() and not parsed.intents and not parsed.required_materials
         if score > 0 or is_empty_search:
             result = dict(row)
@@ -482,7 +499,6 @@ def recommend(
             result["warnings"] = "; ".join(dict.fromkeys(warnings))
             results.append(result)
 
-    # FIX 9: tühja otsingu korral sorteeri tähestiku järgi
     if not query.strip() and not parsed.intents and not parsed.required_materials:
         results.sort(key=lambda item: (item.get("product_name") or "").lower())
     else:
@@ -499,5 +515,5 @@ def quick_answer(result: dict[str, Any]) -> str:
     warnings = f" Hoiatus: {result['warnings']}." if result.get("warnings") else ""
     return (
         f"{result.get('product_name')} ({result.get('article_code')}, {str(result.get('material_code')).upper()}) "
-        f"- skoor {result.get('score')}. Põhjus: {result.get('reasons')}.{warnings}"
+        f"sobib: {result.get('reasons')}.{warnings}"
     )
