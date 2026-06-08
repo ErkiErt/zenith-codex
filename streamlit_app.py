@@ -65,7 +65,6 @@ def render_badges(row):
     tags = str(row.get("property_tags") or "").split(";")
     apps = str(row.get("application_categories") or "").split(";")
     raw_values = [v.strip() for v in apps + tags if v.strip()]
-    # Tõlgi koodid; tundmatu kood jääb muutmata
     labels = [BADGE_LABELS.get(v, v) for v in raw_values]
     if labels:
         st.caption(" · ".join(dict.fromkeys(labels)))
@@ -106,7 +105,7 @@ with st.sidebar:
     st.header("Nõuded")
     query = st.text_input(
         "Kirjelda vajadust",
-        placeholder="nt õlipaagi tihend 100 kraadi 70 Shore või lumesahk 10 mm",
+        placeholder="nt õlipaagi tihend 100°C, lumesahk 10mm, food grade",
     )
 
     examples = {
@@ -159,7 +158,7 @@ with tab_recommend:
     col_d.metric("Sünonüüme", len(data["synonyms"]))
 
     if not query and not required_materials and not required_intents and not use_temp and not use_hardness and not use_thickness:
-        st.info("Sisesta vasakul vajadus või vali filtrid. Näiteks: õlipaagi tihend 100 kraadi, lumesahk 10 mm, food grade 120 kraadi.")
+        st.info("Kirjelda materjali vajadust otsingulahtris või vali omadused filtritest. Näiteks: õlipaagi tihend 100°C, lumesahk 10mm, food grade.")
 
     if not results:
         st.warning("Sobivat tulemust ei leitud. Proovi eemaldada mõni filter või kirjelda kasutuskeskkonda teisiti.")
@@ -235,14 +234,14 @@ with tab_table:
         st.dataframe(as_df(data["products"]), use_container_width=True, hide_index=True)
 
 with tab_sources:
-    st.subheader("Lähtefailid ja kaitsespõhimõte")
+    st.subheader("Andmeallikad ja lukustuspõhimõte")
     st.write("Zenithi tehnilised lähteandmed on lukustatud. Uue info korral tuleb lisada tõendus ja uus versioon, mitte vana rida üle kirjutada.")
     st.dataframe(as_df(data["materials"]), use_container_width=True, hide_index=True)
     st.markdown(f"- Excel: `{EXCEL_PATH.name}`")
     st.markdown(f"- SQLite: `{DB_PATH.name}`")
 
 with tab_review:
-    st.subheader("Kontrolli vajavad kohad")
+    st.subheader("Ülevaatust vajavad kirjed")
     st.dataframe(as_df(data["needs_review"]), use_container_width=True, hide_index=True)
     st.subheader("Sünonüümid")
     st.dataframe(as_df(data["synonyms"]), use_container_width=True, hide_index=True)
