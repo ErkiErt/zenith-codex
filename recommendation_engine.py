@@ -10,6 +10,11 @@ from typing import Any
 
 DB_NAME = "Zenith_Materjalibaas.sqlite"
 
+# FIX 1: food_contact and construction_fire require explicit app/tag match (require_app_or_tag gate).
+# FIX 2: low_temperature now has explicit apps/tags and penalises sbr; also checks min_temp_c.
+# FIX 3: chemical requires explicit app/tag; penalises material-only match.
+# FIX 4: quality_bonus no longer rewards food_grade / flame_retardant / fire_resistance.
+# FIX 5: construction_fire added as explicit intent with its own rule.
 INTENT_RULES: dict[str, dict[str, Any]] = {
     "oilfuel": {
         "apps": {"oilfuel"},
@@ -35,11 +40,13 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "materials": {"nr", "sbr"},
         "avoid_materials": {"epdm"},
     },
+    # FIX 1: food_contact — app/tag match is REQUIRED; without it penalise
     "food_contact": {
         "apps": {"food_contact"},
         "tags": {"food_grade"},
         "materials": {"silicone", "epdm", "nbr", "cr"},
         "avoid_materials": set(),
+        "require_app_or_tag": True,
     },
     "high_temperature": {
         "apps": {"high_temperature"},
@@ -47,17 +54,28 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "materials": {"silicone", "fkm", "epdm", "csm"},
         "avoid_materials": set(),
     },
+    # FIX 2: low_temperature — explicit apps/tags + penalise sbr
     "low_temperature": {
-        "apps": set(),
-        "tags": set(),
-        "materials": {"silicone", "epdm", "nr"},
-        "avoid_materials": set(),
+        "apps": {"low_temperature"},
+        "tags": {"low_temperature"},
+        "materials": {"silicone", "epdm", "nr", "butyl"},
+        "avoid_materials": {"sbr"},
     },
+    # FIX 3: chemical — explicit app/tag gate
     "chemical": {
-        "apps": set(),
-        "tags": {"chemical_resistance", "chemical_resistance_text"},
+        "apps": {"chemical"},
+        "tags": {"chemical_resistance"},
         "materials": {"fkm", "nbr", "epdm", "cr"},
         "avoid_materials": set(),
+        "require_app_or_tag": True,
+    },
+    # FIX 5: construction_fire as explicit gated intent
+    "construction_fire": {
+        "apps": {"construction_fire"},
+        "tags": {"flame_retardant", "fire_resistance"},
+        "materials": {"cr", "csm", "nbr_pvc"},
+        "avoid_materials": set(),
+        "require_app_or_tag": True,
     },
     "seal_general": {
         "apps": set(),
@@ -110,6 +128,8 @@ DIRECT_TERMS = {
     "kulm": "low_temperature",
     "kemikaal": "chemical",
     "keemia": "chemical",
+    "tulekindlus": "construction_fire",
+    "tulekaitse": "construction_fire",
 }
 
 
@@ -314,22 +334,56 @@ def recommend(
             rule = INTENT_RULES.get(intent) or INTENT_RULES.get(normalize_text(intent))
             if not rule:
                 continue
+
             app_hits = apps.intersection(rule["apps"])
             tag_hits = tags.intersection(rule["tags"])
             material_hit = material in rule["materials"]
             avoid_hit = material in rule["avoid_materials"]
-            if app_hits:
-                score += 35
-                reasons.append(f"kasutusvaldkond sobib: {', '.join(sorted(app_hits))}")
-            if tag_hits:
-                score += 30
-                reasons.append(f"omadus sobib: {', '.join(sorted(tag_hits))}")
-            if material_hit:
-                score += 15
-                reasons.append(f"materjal sobib nõudele: {material}")
+            requires_gate = rule.get("require_app_or_tag", False)
+
+            # Gated intents (food_contact, chemical, construction_fire):
+            # full credit only when app OR tag explicitly matches;
+            # material-only match earns nothing and gets a warning.
+            if requires_gate:
+                if app_hits:
+                    score += 35
+                    reasons.append(f"kasutusvaldkond sobib: {', '.join(sorted(app_hits))}")
+                if tag_hits:
+                    score += 30
+                    reasons.append(f"omadus sobib: {', '.join(sorted(tag_hits))}")
+                if not app_hits and not tag_hits:
+                    score -= 20
+                    warnings.append(
+                        f"toode ei oma kinnitatud '{intent}' vastet — kasuta ainult selge sertifikaadi korral"
+                    )
+                elif material_hit:
+                    # material bonus only when gate already passed
+                    score += 10
+                    reasons.append(f"materjal toetab nõuet: {material}")
+            else:
+                if app_hits:
+                    score += 35
+                    reasons.append(f"kasutusvaldkond sobib: {', '.join(sorted(app_hits))}")
+                if tag_hits:
+                    score += 30
+                    reasons.append(f"omadus sobib: {', '.join(sorted(tag_hits))}")
+                if material_hit:
+                    score += 15
+                    reasons.append(f"materjal sobib nõudele: {material}")
+
             if avoid_hit:
                 score -= 30
                 warnings.append(f"{material.upper()} võib selle kasutuse jaoks olla nõrk valik")
+
+        # FIX 2: low_temperature — bonus for confirmed cold rating via min_temp_c
+        if "low_temperature" in parsed.intents:
+            min_temp = row.get("min_temp_c")
+            if min_temp is not None and float(min_temp) <= -40:
+                score += 15
+                reasons.append(f"miinimumtemperatuur {float(min_temp):g} C — sügavkülm")
+            elif min_temp is not None and float(min_temp) <= -30:
+                score += 5
+                reasons.append(f"miinimumtemperatuur {float(min_temp):g} C — külmakindel")
 
         if parsed.required_materials:
             if material in parsed.required_materials:
