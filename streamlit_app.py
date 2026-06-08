@@ -33,6 +33,19 @@ def render_badges(row):
         st.caption(" · ".join(dict.fromkeys(values)))
 
 
+def sobivusaste(score: int) -> str:
+    """Teisenda numbriline skoor kasutajasõbralikuks sobivustasemeks."""
+    if score >= 120:
+        return "★ Suurepärane sobivus"
+    if score >= 80:
+        return "★ Väga hea sobivus"
+    if score >= 50:
+        return "○ Hea sobivus"
+    if score >= 25:
+        return "○ Rahuldav sobivus"
+    return "◦ Nõrk vaste"
+
+
 db_mtime = DB_PATH.stat().st_mtime if DB_PATH.exists() else 0
 data = get_data(db_mtime)
 
@@ -45,6 +58,7 @@ intent_options = {
     "Kõrge temperatuur": "high_temperature",
     "Madal temperatuur": "low_temperature",
     "Keemiline vastupidavus": "chemical",
+    "Tulekindlus / ehitus": "construction_fire",
 }
 
 st.title("Zenith materjalisoovitaja")
@@ -63,6 +77,7 @@ with st.sidebar:
         "Food Grade": "food grade 120 kraadi",
         "UV EPDM": "UV ilmastik EPDM",
         "FKM kuum": "FKM 200 kraadi kemikaal",
+        "Külm -50": "külm -50 kraadi tihend",
     }
     example = st.selectbox("Kiirpäring", [""] + list(examples.keys()))
     if example and not query:
@@ -116,7 +131,11 @@ with tab_recommend:
         st.success(quick_answer(best))
 
         for index, row in enumerate(results, start=1):
-            with st.expander(f"{index}. {row['product_name']} · {row['article_code']} · {str(row['material_code']).upper()} · skoor {row['score']}", expanded=index <= 3):
+            aste = sobivusaste(row["score"])
+            with st.expander(
+                f"{index}. {row['product_name']} · {row['article_code']} · {str(row['material_code']).upper()} · {aste}",
+                expanded=index <= 3,
+            ):
                 render_badges(row)
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Min C", row.get("min_temp_c"))
@@ -129,7 +148,11 @@ with tab_recommend:
                 if row.get("warnings"):
                     st.warning(row["warnings"])
                 st.write("**Eripära:**", row.get("feature_text") or "-")
-                st.caption(f"Allikastaatus: {row.get('source_status')} · Kontroll: {row.get('verification_status')} · Zenith lukus: {row.get('locked_zenith')}")
+                st.caption(
+                    f"Allikastaatus: {row.get('source_status')} · "
+                    f"Kontroll: {row.get('verification_status')} · "
+                    f"Zenith lukus: {row.get('locked_zenith')}"
+                )
 
                 variants = variants_for_product(data, row["product_id"])
                 if variants:
@@ -153,8 +176,9 @@ with tab_table:
     st.subheader("Otsingu tulemused tabelina")
     if results:
         table = as_df(results)
+        table["sobivus"] = table["score"].apply(sobivusaste)
         shown = [
-            "score",
+            "sobivus",
             "product_name",
             "article_code",
             "material_code",
@@ -173,7 +197,7 @@ with tab_table:
         st.dataframe(as_df(data["products"]), use_container_width=True, hide_index=True)
 
 with tab_sources:
-    st.subheader("Lähtefailid ja kaitsepõhimõte")
+    st.subheader("Lähtefailid ja kaitsespõhimõte")
     st.write("Zenithi tehnilised lähteandmed on lukustatud. Uue info korral tuleb lisada tõendus ja uus versioon, mitte vana rida üle kirjutada.")
     st.dataframe(as_df(data["materials"]), use_container_width=True, hide_index=True)
     st.markdown(f"- Excel: `{EXCEL_PATH.name}`")
