@@ -12,6 +12,42 @@ BASE = Path(__file__).resolve().parent
 DB_PATH = BASE / "Zenith_Materjalibaas.sqlite"
 EXCEL_PATH = BASE / "Zenith_Materjalibaas_LOPLIK.xlsx"
 
+# Tõlgib andmebaasi sisekoodid kasutajasõbralikeks eestikeelseteks siltideks.
+# Tundmatud koodid kuvatakse sellisena nagu on (muutmata).
+BADGE_LABELS: dict[str, str] = {
+    # kasutusvaldkonnad
+    "oilfuel": "Õli / kütus",
+    "weather_uv": "UV / ilmastik",
+    "abrasion_wear": "Kulumiskindlus",
+    "food_contact": "Food Grade",
+    "high_temperature": "Kõrge temperatuur",
+    "low_temperature": "Madal temperatuur",
+    "chemical": "Keemiline vastupidavus",
+    "construction_fire": "Tulekindlus",
+    "lumelukkamine": "Lumesahk / lumelukkamine",
+    "seal_general": "Tihend",
+    "hose_general": "Voolik",
+    "needs_classification": "⚠️ Klassifitseerimata",
+    # omadussildid
+    "oil_fuel_resistance": "Õli-/kütusekindlus",
+    "uv_weather_resistance": "UV-kindlus",
+    "abrasion_resistance": "Kulumiskindlus",
+    "food_grade": "Toiduklass (FDA)",
+    "chemical_resistance": "Keemiakindlus",
+    "flame_retardant": "Leegikindel",
+    "fire_resistance": "Tulekindel",
+    "ozone_resistance": "Osoonikindlus",
+    "steam_resistance": "Aurupidavus",
+    "water_resistance": "Veekindlus",
+    "pressure_resistance": "Rõhukindlus",
+    "electrical_insulation": "Elektriline isolatsioon",
+    "antistatic": "Antistaatiline",
+    "conductive": "Juhtiv",
+    "peroxide_cured": "Peroksiidvulkaniseeritud",
+    "sulfur_cured": "Väävelvulkaniseeritud",
+    "reinforced": "Armeeritud",
+}
+
 
 st.set_page_config(page_title="Zenith materjalisoovitaja", page_icon="Z", layout="wide")
 
@@ -28,9 +64,11 @@ def as_df(rows):
 def render_badges(row):
     tags = str(row.get("property_tags") or "").split(";")
     apps = str(row.get("application_categories") or "").split(";")
-    values = [value for value in apps + tags if value]
-    if values:
-        st.caption(" · ".join(dict.fromkeys(values)))
+    raw_values = [v.strip() for v in apps + tags if v.strip()]
+    # Tõlgi koodid; tundmatu kood jääb muutmata
+    labels = [BADGE_LABELS.get(v, v) for v in raw_values]
+    if labels:
+        st.caption(" · ".join(dict.fromkeys(labels)))
 
 
 def sobivusaste(score: int) -> str:
