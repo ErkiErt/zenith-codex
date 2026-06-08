@@ -10,11 +10,21 @@ from typing import Any
 
 DB_NAME = "Zenith_Materjalibaas.sqlite"
 
-# FIX 1: food_contact and construction_fire require explicit app/tag match (require_app_or_tag gate).
-# FIX 2: low_temperature now has explicit apps/tags and penalises sbr; also checks min_temp_c.
-# FIX 3: chemical requires explicit app/tag; penalises material-only match.
-# FIX 4: quality_bonus no longer rewards food_grade / flame_retardant / fire_resistance.
-# FIX 5: construction_fire added as explicit intent with its own rule.
+# ── Paranduste ajalugu ─────────────────────────────────────────────────────────
+# FIX 1 : food_contact / construction_fire nõuavad selget app/tag vastet (require_app_or_tag gate)
+# FIX 2 : low_temperature on eksplitsiitsete apps/tags-iga; penaliseerib sbr; kontrollib min_temp_c
+# FIX 3 : chemical nõuab app/tag vastet; materjalipõhine vaste üksi ei piisa
+# FIX 4 : quality_bonus ei premieeri food_grade / flame_retardant / fire_resistance
+# FIX 5 : construction_fire lisatud eraldi gated intendina
+# FIX 6 : DIRECT_TERMS — eemaldatud "oli" (liiga lühike), "lipaagi" (duplikaat),
+#          "kulm" (konflikt "kulumis-"-ega); lisatud "olipaak", "kutuse", "kytuse"
+# FIX 7 : temperatuuriregex kasutab sõnapiiri \b et vältida "cr"/"csm" valevasteid
+# FIX 8 : külma temperatuuri kontroll — kui service_temp_c < 0, kontrolli min_temp_c
+#          (mitte max_temp_c, mis oli alati tõene)
+# FIX 9 : tühja päringu sort — tähestiku järgi product_name alusel
+# FIX 10: lumelukkamine + abrasion_wear topeltskooring välistatud
+# ──────────────────────────────────────────────────────────────────────────────
+
 INTENT_RULES: dict[str, dict[str, Any]] = {
     "oilfuel": {
         "apps": {"oilfuel"},
@@ -34,13 +44,15 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "materials": {"nr", "sbr"},
         "avoid_materials": set(),
     },
+    # lumelukkamine kasutab abrasion_wear apps/tags-e, kuid on eraldi intent
+    # et vältida topeltskoorimist kui mõlemad on aktiivsed (FIX 10)
     "lumelukkamine": {
         "apps": {"abrasion_wear"},
         "tags": {"abrasion_resistance"},
         "materials": {"nr", "sbr"},
         "avoid_materials": {"epdm"},
     },
-    # FIX 1: food_contact — app/tag match is REQUIRED; without it penalise
+    # FIX 1: gate — app/tag peab olema olemas
     "food_contact": {
         "apps": {"food_contact"},
         "tags": {"food_grade"},
@@ -54,14 +66,14 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "materials": {"silicone", "fkm", "epdm", "csm"},
         "avoid_materials": set(),
     },
-    # FIX 2: low_temperature — explicit apps/tags + penalise sbr
+    # FIX 2: eksplitsiitsed apps/tags; sbr penaliseeritud
     "low_temperature": {
         "apps": {"low_temperature"},
         "tags": {"low_temperature"},
         "materials": {"silicone", "epdm", "nr", "butyl"},
         "avoid_materials": {"sbr"},
     },
-    # FIX 3: chemical — explicit app/tag gate
+    # FIX 3: gate — app/tag peab olema olemas
     "chemical": {
         "apps": {"chemical"},
         "tags": {"chemical_resistance"},
@@ -69,7 +81,7 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "avoid_materials": set(),
         "require_app_or_tag": True,
     },
-    # FIX 5: construction_fire as explicit gated intent
+    # FIX 5: uus gated intent
     "construction_fire": {
         "apps": {"construction_fire"},
         "tags": {"flame_retardant", "fire_resistance"},
@@ -77,6 +89,8 @@ INTENT_RULES: dict[str, dict[str, Any]] = {
         "avoid_materials": set(),
         "require_app_or_tag": True,
     },
+    # Reservintendid tuleviku kasutusvaldkondade jaoks — ei lisa praegu punkte.
+    # Vajadusel lisa apps/tags/materials.
     "seal_general": {
         "apps": set(),
         "tags": set(),
@@ -101,16 +115,21 @@ MATERIAL_INTENTS = {
     "material_nr": "nr",
 }
 
+# FIX 6: eemaldatud "oli" (liiga lühike — tabab "kooli", "tooli" jne),
+#         "lipaagi" (duplikaat "olipaagi"-ga),
+#         "kulm" (konflikt "kulumis-" algusega).
+#         Lisatud: "olipaak", "kutuse", "kytuse".
 DIRECT_TERMS = {
     "lumesahk": "lumelukkamine",
     "sahk": "lumelukkamine",
     "lume sahk": "lumelukkamine",
     "snow plow": "lumelukkamine",
     "snow blade": "lumelukkamine",
-    "oli": "oilfuel",
-    "lipaagi": "oilfuel",
     "olipaagi": "oilfuel",
+    "olipaak": "oilfuel",
     "kutus": "oilfuel",
+    "kutuse": "oilfuel",
+    "kytuse": "oilfuel",
     "bensiin": "oilfuel",
     "diisel": "oilfuel",
     "uv": "weather_uv",
@@ -125,7 +144,6 @@ DIRECT_TERMS = {
     "kuum": "high_temperature",
     "korge temperatuur": "high_temperature",
     "kylm": "low_temperature",
-    "kulm": "low_temperature",
     "kemikaal": "chemical",
     "keemia": "chemical",
     "tulekindlus": "construction_fire",
@@ -212,8 +230,9 @@ def parse_query(query: str, synonyms: list[dict[str, Any]]) -> ParsedQuery:
             required_materials.add("silicone" if material == "silikon" else material)
 
     service_temp = None
+    # FIX 7: sõnapiir \b välistab "cr", "csm" jm materjalikoodi valevasted
     for pattern in [
-        r"(-?\d+(?:[\.,]\d+)?)\s*(?:c|kraadi)",
+        r"(-?\d+(?:[\.,]\d+)?)\s*(?:\bc\b|kraadi)",
         r"(?:temp|temperatuur)[^\d-]*(-?\d+(?:[\.,]\d+)?)",
         r"\+\s*(\d+(?:[\.,]\d+)?)",
     ]:
@@ -315,6 +334,12 @@ def recommend(
     variants = data["variants"]
     results: list[dict[str, Any]] = []
 
+    # FIX 10: kui lumelukkamine on aktiivsete intentide hulgas, eemalda abrasion_wear
+    # et vältida topeltskoorimist (mõlemal on identsed apps/tags)
+    active_intents = set(parsed.intents)
+    if "lumelukkamine" in active_intents:
+        active_intents.discard("abrasion_wear")
+
     for row in data["products"]:
         material = str(row.get("material_code") or "")
         apps = split_codes(row.get("application_categories"))
@@ -330,7 +355,7 @@ def recommend(
                 score += min(25, len(set(token_hits)) * 5)
                 reasons.append("tekstivaste: " + ", ".join(sorted(set(token_hits))[:5]))
 
-        for intent in parsed.intents:
+        for intent in active_intents:
             rule = INTENT_RULES.get(intent) or INTENT_RULES.get(normalize_text(intent))
             if not rule:
                 continue
@@ -341,9 +366,9 @@ def recommend(
             avoid_hit = material in rule["avoid_materials"]
             requires_gate = rule.get("require_app_or_tag", False)
 
-            # Gated intents (food_contact, chemical, construction_fire):
-            # full credit only when app OR tag explicitly matches;
-            # material-only match earns nothing and gets a warning.
+            # Gated intendid (food_contact, chemical, construction_fire):
+            # täispunkte saab ainult siis kui app VÕI tag selgelt vastab;
+            # materjalipõhine vaste üksi ei piisa ja saab hoiatuse.
             if requires_gate:
                 if app_hits:
                     score += 35
@@ -357,7 +382,6 @@ def recommend(
                         f"toode ei oma kinnitatud '{intent}' vastet — kasuta ainult selge sertifikaadi korral"
                     )
                 elif material_hit:
-                    # material bonus only when gate already passed
                     score += 10
                     reasons.append(f"materjal toetab nõuet: {material}")
             else:
@@ -375,8 +399,8 @@ def recommend(
                 score -= 30
                 warnings.append(f"{material.upper()} võib selle kasutuse jaoks olla nõrk valik")
 
-        # FIX 2: low_temperature — bonus for confirmed cold rating via min_temp_c
-        if "low_temperature" in parsed.intents:
+        # FIX 2 järg: low_temperature — boonus kinnitatud külmareitingä eest min_temp_c kaudu
+        if "low_temperature" in active_intents:
             min_temp = row.get("min_temp_c")
             if min_temp is not None and float(min_temp) <= -40:
                 score += 15
@@ -393,15 +417,31 @@ def recommend(
                 score -= 80
                 warnings.append("ei vasta valitud materjalile")
 
+        # FIX 8: külma temperatuuri kontroll
+        # Negatiivse service_temp korral on kriitiline et min_temp_c on piisavalt madal.
+        # Vana loogika (float(min_temp) <= t <= float(max_temp)) läbis kõik tooted
+        # sest max_temp >= -50 on alati tõene.
         if parsed.service_temp_c is not None:
             min_temp = row.get("min_temp_c")
             max_temp = row.get("max_temp_c")
-            if min_temp is not None and max_temp is not None and float(min_temp) <= parsed.service_temp_c <= float(max_temp):
-                score += 35
-                reasons.append(f"temperatuurivahemik katab {parsed.service_temp_c:g} C")
-            else:
-                score -= 90
-                warnings.append(f"temperatuur {parsed.service_temp_c:g} C jääb vahemikust välja")
+            if min_temp is not None and max_temp is not None:
+                t = parsed.service_temp_c
+                if t < 0:
+                    # Külm: oluline on min_temp_c; max_temp peab olema ≥ 0 vm kasutuskeskk.
+                    if float(min_temp) <= t:
+                        score += 35
+                        reasons.append(f"min temperatuur {float(min_temp):g} C katab nõutud {t:g} C")
+                    else:
+                        score -= 90
+                        warnings.append(f"toode ei talu {t:g} C (min {float(min_temp):g} C)")
+                else:
+                    # Soe/kuum: kontrollime täielikku vahemikku
+                    if float(min_temp) <= t <= float(max_temp):
+                        score += 35
+                        reasons.append(f"temperatuurivahemik katab {t:g} C")
+                    else:
+                        score -= 90
+                        warnings.append(f"temperatuur {t:g} C jääb vahemikust välja")
 
         if parsed.hardness is not None:
             row_hardness = row.get("hardness_shore_a")
@@ -427,22 +467,27 @@ def recommend(
                 score -= 60
                 warnings.append(f"paksust {parsed.thickness_mm:g} mm ei leitud")
 
-        if not query.strip() and not parsed.intents and not parsed.required_materials:
-            score += 1
-
         if "needs_classification" in apps:
             warnings.append("kasutusvaldkond vajab ülevaatust")
         if "needs" in normalize_text(row.get("verification_status")):
             warnings.append("puudub täpne PDF lehe viide")
 
-        if score > 0:
+        # FIX 9: tühja päringu korral lisa kõik tooted score=0-ga;
+        # sort toimub hiljem product_name järgi (vt allpool)
+        is_empty_search = not query.strip() and not parsed.intents and not parsed.required_materials
+        if score > 0 or is_empty_search:
             result = dict(row)
             result["score"] = score
-            result["reasons"] = "; ".join(dict.fromkeys(reasons)) or "üldine vaste"
+            result["reasons"] = "; ".join(dict.fromkeys(reasons)) or ("üldine loend" if is_empty_search else "üldine vaste")
             result["warnings"] = "; ".join(dict.fromkeys(warnings))
             results.append(result)
 
-    results.sort(key=lambda item: (item["score"], item.get("max_temp_c") or -999), reverse=True)
+    # FIX 9: tühja otsingu korral sorteeri tähestiku järgi
+    if not query.strip() and not parsed.intents and not parsed.required_materials:
+        results.sort(key=lambda item: (item.get("product_name") or "").lower())
+    else:
+        results.sort(key=lambda item: (item["score"], item.get("max_temp_c") or -999), reverse=True)
+
     return results[:limit]
 
 
